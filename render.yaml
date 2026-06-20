@@ -1,0 +1,56 @@
+# Render blueprint — Cosmo backend (NestJS).
+# Connect this repo at https://dashboard.render.com/select-repo?type=blueprint
+# Render reads this file and creates the service; fill the `sync: false` vars in
+# the dashboard (they are secrets).
+
+services:
+  - type: web
+    name: cosmo-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: frankfurt # closest to the eu-central-1 Supabase project
+    plan: free # cold-starts after 15 min idle; upgrade to starter ($7/mo) to avoid
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "4000"
+      - key: FRONTEND_ORIGIN
+        value: https://cosmo.6x7.gr,https://6x7.gr
+
+      # PostgreSQL — Supabase pooler, schema=cosmo. Format:
+      # postgresql://postgres.fmrnqepyyjucnfbrqawl:<DB_PASSWORD>@aws-0-eu-central-1.pooler.supabase.com:6543/postgres?schema=cosmo&pgbouncer=true
+      - key: DATABASE_URL
+        sync: false
+
+      - key: JWT_SECRET
+        generateValue: true # Render generates a strong random value
+
+      # Redis (Upstash) — for the BullMQ AI job queue.
+      - key: REDIS_HOST
+        sync: false # e.g. eu1-xxxx.upstash.io  (no scheme)
+      - key: REDIS_PORT
+        value: "6379"
+      - key: REDIS_PASSWORD
+        sync: false
+      - key: REDIS_TLS
+        value: "true"
+
+      # Supabase — URL is public; the service-role key is a secret.
+      - key: SUPABASE_URL
+        value: https://fmrnqepyyjucnfbrqawl.supabase.co
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false # Supabase → Settings → API → service_role
+
+      # AI provider (story generation).
+      - key: GROQ_API_KEY
+        sync: false
+
+      # Media uploads stay disabled until an S3-compatible store (Cloudflare R2 /
+      # Supabase Storage) is configured. Leaving these unset is safe — the media
+      # service returns a friendly "uploads disabled" error.
+      # - key: MINIO_ENDPOINT
+      #   sync: false

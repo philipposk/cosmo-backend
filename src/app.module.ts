@@ -43,6 +43,10 @@ import { MediaModule } from './media/media.module';
       connection: {
         host: process.env.REDIS_HOST ?? '127.0.0.1',
         port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
+        // Managed Redis (e.g. Upstash) needs a password and TLS; local dev does
+        // not. Both are opt-in via env so nothing changes for local runs.
+        password: process.env.REDIS_PASSWORD || undefined,
+        ...(process.env.REDIS_TLS === 'true' ? { tls: {} } : {}),
       },
     }),
     PrismaModule,
