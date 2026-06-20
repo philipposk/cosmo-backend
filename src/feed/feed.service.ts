@@ -132,7 +132,37 @@ export class FeedService {
       include: POST_INCLUDE,
     });
     if (!post) throw new NotFoundException('Post not found');
+    if (!(await this.canViewPost(post, viewerId))) {
+      // Don't reveal that a private/friends-only post exists.
+      throw new NotFoundException('Post not found');
+    }
     return this.shapePost(post, viewerId);
+  }
+
+  /**
+   * A viewer may see a post when it is PUBLIC, it's their own, or it's
+   * FRIENDS-visibility and they have an ACCEPTED follow on the author.
+   * PRIVATE posts are visible only to the author.
+   */
+  private async canViewPost(
+    post: { authorId: string; visibility: VisibilityLevel },
+    viewerId: string,
+  ): Promise<boolean> {
+    if (post.visibility === VisibilityLevel.PUBLIC) return true;
+    if (post.authorId === viewerId) return true;
+    if (post.visibility === VisibilityLevel.FRIENDS) {
+      const follow = await this.prisma.follow.findUnique({
+        where: {
+          followerId_followingId: {
+            followerId: viewerId,
+            followingId: post.authorId,
+          },
+        },
+        select: { status: true },
+      });
+      return follow?.status === 'ACCEPTED';
+    }
+    return false;
   }
 
   async remove(postId: string, userId: string) {
@@ -184,7 +214,15 @@ export class FeedService {
     return { reacted: true };
   }
 
-  async listComments(postId: string) {
+  async listComments(postId: string, viewerId: string) {
+    const post = await this.prisma.post.findUnique({
+      where: { id: postId },
+      select: { authorId: true, visibility: true },
+    });
+    if (!post) throw new NotFoundException('Post not found');
+    if (!(await this.canViewPost(post, viewerId))) {
+      throw new NotFoundException('Post not found');
+    }
     return this.prisma.comment.findMany({
       where: { postId, deletedAt: null },
       include: {
@@ -317,6 +355,7 @@ export class FeedService {
         .filter((r) => r.userId === viewerId)
         .map((r) => r.kind),
       media: post.media
+        .filter((pm) => pm.media?.status === 'READY')
         .sort((a, b) => a.position - b.position)
         .map((pm) => pm.media),
     };

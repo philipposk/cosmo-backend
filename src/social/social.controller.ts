@@ -7,7 +7,12 @@ import {
   Patch,
   Post,
   Query,
+  Req,
+  UseGuards,
 } from '@nestjs/common';
+import { AuthenticatedGuard } from '../common/authenticated.guard';
+import type { AuthenticatedRequest } from '../common/auth-request.util';
+import { assertAuthenticatedUser } from '../common/auth-request.util';
 import { SocialService } from './social.service';
 import { FollowRequestDto } from './dto/follow-request.dto';
 import { FriendRequestDto } from './dto/friend-request.dto';
@@ -17,60 +22,88 @@ import { FriendResponseDto } from './dto/friend-response.dto';
 export class SocialController {
   constructor(private readonly socialService: SocialService) {}
 
+  // ── Mutations: actor is ALWAYS the authenticated user, never the body. ──────
+
   @Post('follow')
-  async follow(@Body() payload: FollowRequestDto) {
-    return this.socialService.requestFollow(
-      payload.followerId,
-      payload.followingId,
-    );
+  @UseGuards(AuthenticatedGuard)
+  async follow(
+    @Req() req: AuthenticatedRequest,
+    @Body() payload: FollowRequestDto,
+  ) {
+    const { id } = assertAuthenticatedUser(req);
+    return this.socialService.requestFollow(id, payload.followingId);
   }
 
   @Patch('follow/accept')
-  async acceptFollow(@Body() payload: FollowRequestDto) {
-    return this.socialService.acceptFollow(
-      payload.followerId,
-      payload.followingId,
-    );
+  @UseGuards(AuthenticatedGuard)
+  async acceptFollow(
+    @Req() req: AuthenticatedRequest,
+    @Body() payload: FollowRequestDto,
+  ) {
+    // The authenticated user is the followee accepting an incoming request.
+    const { id } = assertAuthenticatedUser(req);
+    return this.socialService.acceptFollow(payload.followerId, id);
   }
 
   @Delete('follow')
-  async unfollow(@Body() payload: FollowRequestDto) {
-    await this.socialService.removeFollow(
-      payload.followerId,
-      payload.followingId,
-    );
+  @UseGuards(AuthenticatedGuard)
+  async unfollow(
+    @Req() req: AuthenticatedRequest,
+    @Body() payload: FollowRequestDto,
+  ) {
+    const { id } = assertAuthenticatedUser(req);
+    await this.socialService.removeFollow(id, payload.followingId);
     return { success: true };
   }
 
   @Post('friend')
-  async requestFriend(@Body() payload: FriendRequestDto) {
-    return this.socialService.requestFriendship(
-      payload.initiatorId,
-      payload.recipientId,
-    );
+  @UseGuards(AuthenticatedGuard)
+  async requestFriend(
+    @Req() req: AuthenticatedRequest,
+    @Body() payload: FriendRequestDto,
+  ) {
+    const { id } = assertAuthenticatedUser(req);
+    return this.socialService.requestFriendship(id, payload.recipientId);
   }
 
   @Patch('friend/respond')
-  async respondFriend(@Body() payload: FriendResponseDto) {
+  @UseGuards(AuthenticatedGuard)
+  async respondFriend(
+    @Req() req: AuthenticatedRequest,
+    @Body() payload: FriendResponseDto,
+  ) {
+    const { id } = assertAuthenticatedUser(req);
     return this.socialService.respondFriendship(
       payload.friendshipId,
       payload.accept,
+      id,
     );
   }
 
   @Delete('friend/:friendshipId')
-  async removeFriend(@Param('friendshipId') friendshipId: string) {
-    await this.socialService.removeFriendship(friendshipId);
+  @UseGuards(AuthenticatedGuard)
+  async removeFriend(
+    @Req() req: AuthenticatedRequest,
+    @Param('friendshipId') friendshipId: string,
+  ) {
+    const { id } = assertAuthenticatedUser(req);
+    await this.socialService.removeFriendship(friendshipId, id);
     return { success: true };
   }
 
+  // ── Relationship status needs the viewer's identity → authenticated. ────────
+
   @Get('status')
+  @UseGuards(AuthenticatedGuard)
   async status(
-    @Query('viewerId') viewerId: string,
+    @Req() req: AuthenticatedRequest,
     @Query('targetId') targetId: string,
   ) {
-    return this.socialService.getStatus(viewerId, targetId);
+    const { id } = assertAuthenticatedUser(req);
+    return this.socialService.getStatus(id, targetId);
   }
+
+  // ── Public follower/following lists (guest-readable) — public subset only. ──
 
   @Get('followers/:userId')
   async followers(@Param('userId') userId: string) {

@@ -58,7 +58,10 @@ export class UsersService {
     };
   }
 
-  async getByUsername(username: string): Promise<UserProfileDto> {
+  async getByUsername(
+    username: string,
+    viewer?: { id: string; roles?: string[] } | null,
+  ): Promise<UserProfileDto> {
     const user = await this.prisma.user.findUnique({
       where: { username: username.toLowerCase() },
     });
@@ -67,11 +70,77 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
+    // PRIVATE / FRIENDS profiles only reveal their full detail to the owner,
+    // an admin, or (for FRIENDS) an accepted follower / active friend.
+    if (!(await this.canViewFullProfile(viewer ?? null, user))) {
+      return this.toMinimalProfileResponse(user);
+    }
+
     const settings = await this.prisma.profileSetting.findUnique({
       where: { userId: user.id },
     });
 
     return this.toProfileResponse(user, settings);
+  }
+
+  /** Public-safe subset shown when a viewer may not see the full profile. */
+  private toMinimalProfileResponse(user: User): UserProfileDto {
+    return {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      bio: null,
+      avatarUrl: user.avatarUrl,
+      coverUrl: null,
+      privacyLevel: user.privacyLevel,
+      roles: [],
+      badges: [],
+      location: null,
+      website: null,
+      pronouns: null,
+      ageGateStatus: user.ageGateStatus,
+      parentalControlLevel: user.parentalControlLevel,
+      onboardingCompleted: user.onboardingCompleted,
+      profileSettings: undefined,
+    };
+  }
+
+  private async canViewFullProfile(
+    viewer: { id: string; roles?: string[] } | null,
+    user: User,
+  ): Promise<boolean> {
+    if (user.privacyLevel === 'PUBLIC') return true;
+    if (!viewer) return false;
+    if (viewer.id === user.id) return true;
+    if (viewer.roles?.includes('ADMIN')) return true;
+
+    if (user.privacyLevel === 'FRIENDS') {
+      const [follow, friendship] = await Promise.all([
+        this.prisma.follow.findUnique({
+          where: {
+            followerId_followingId: {
+              followerId: viewer.id,
+              followingId: user.id,
+            },
+          },
+          select: { status: true },
+        }),
+        this.prisma.friendship.findFirst({
+          where: {
+            status: 'ACTIVE',
+            OR: [
+              { initiatorId: viewer.id, recipientId: user.id },
+              { initiatorId: user.id, recipientId: viewer.id },
+            ],
+          },
+          select: { id: true },
+        }),
+      ]);
+      return follow?.status === 'ACCEPTED' || friendship !== null;
+    }
+
+    // PRIVATE and viewer is neither owner nor admin.
+    return false;
   }
 
   async updateProfile(

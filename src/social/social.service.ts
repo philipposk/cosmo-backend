@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -60,16 +61,18 @@ export class SocialService {
   }
 
   async acceptFollow(followerId: string, followingId: string): Promise<Follow> {
+    const existing = await this.prisma.follow.findUnique({
+      where: { followerId_followingId: { followerId, followingId } },
+    });
+    if (!existing) {
+      throw new NotFoundException('Follow request not found');
+    }
+    if (existing.status === FollowStatus.BLOCKED) {
+      throw new ConflictException('Cannot accept a blocked follow');
+    }
     return this.prisma.follow.update({
-      where: {
-        followerId_followingId: {
-          followerId,
-          followingId,
-        },
-      },
-      data: {
-        status: FollowStatus.ACCEPTED,
-      },
+      where: { followerId_followingId: { followerId, followingId } },
+      data: { status: FollowStatus.ACCEPTED },
     });
   }
 
@@ -114,7 +117,23 @@ export class SocialService {
   async respondFriendship(
     friendshipId: string,
     accept: boolean,
+    actorId: string,
   ): Promise<Friendship> {
+    const friendship = await this.prisma.friendship.findUnique({
+      where: { id: friendshipId },
+    });
+    if (!friendship) {
+      throw new NotFoundException('Friend request not found');
+    }
+    // Only the recipient of a pending request may accept or decline it.
+    if (friendship.recipientId !== actorId) {
+      throw new ForbiddenException(
+        'Only the recipient can respond to this request',
+      );
+    }
+    if (friendship.status !== FriendshipStatus.PENDING) {
+      throw new ConflictException('This request has already been answered');
+    }
     return this.prisma.friendship.update({
       where: { id: friendshipId },
       data: {
@@ -123,8 +142,20 @@ export class SocialService {
     });
   }
 
-  async removeFriendship(friendshipId: string): Promise<void> {
-    await this.prisma.friendship.deleteMany({ where: { id: friendshipId } });
+  async removeFriendship(friendshipId: string, actorId: string): Promise<void> {
+    const friendship = await this.prisma.friendship.findUnique({
+      where: { id: friendshipId },
+    });
+    if (!friendship) {
+      return; // already gone — idempotent
+    }
+    if (
+      friendship.initiatorId !== actorId &&
+      friendship.recipientId !== actorId
+    ) {
+      throw new ForbiddenException('You are not part of this friendship');
+    }
+    await this.prisma.friendship.delete({ where: { id: friendshipId } });
   }
 
   async getStatus(viewerId: string, targetId: string) {
@@ -163,17 +194,27 @@ export class SocialService {
     };
   }
 
+  // Public profile fields only — never leak email or auth columns through the
+  // social graph (these list endpoints are guest-readable).
+  private static readonly PUBLIC_USER_SELECT = {
+    id: true,
+    username: true,
+    displayName: true,
+    avatarUrl: true,
+    privacyLevel: true,
+  } as const;
+
   async listFollowers(userId: string) {
     return this.prisma.follow.findMany({
       where: { followingId: userId, status: FollowStatus.ACCEPTED },
-      include: { follower: true },
+      include: { follower: { select: SocialService.PUBLIC_USER_SELECT } },
     });
   }
 
   async listFollowing(userId: string) {
     return this.prisma.follow.findMany({
       where: { followerId: userId, status: FollowStatus.ACCEPTED },
-      include: { following: true },
+      include: { following: { select: SocialService.PUBLIC_USER_SELECT } },
     });
   }
 }

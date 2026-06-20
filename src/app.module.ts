@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
@@ -27,6 +29,16 @@ import { MediaModule } from './media/media.module';
       isGlobal: true,
       envFilePath: ['.env'],
     }),
+    // Global baseline rate limit: 120 requests / minute / IP. Protects every
+    // endpoint from flooding — especially the AI routes (which cost money per
+    // call) and the forum/social write paths. Tighten specific routes with
+    // @Throttle({ default: { limit, ttl } }) where needed.
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60_000,
+        limit: 120,
+      },
+    ]),
     BullModule.forRoot({
       connection: {
         host: process.env.REDIS_HOST ?? '127.0.0.1',
@@ -52,6 +64,10 @@ import { MediaModule } from './media/media.module';
     MediaModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    // Apply the rate limit globally.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+  ],
 })
 export class AppModule {}

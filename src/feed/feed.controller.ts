@@ -72,8 +72,13 @@ export class FeedController {
   }
 
   @Get('posts/:postId/comments')
-  comments(@Param('postId') postId: string) {
-    return this.feed.listComments(postId);
+  @UseGuards(AuthenticatedGuard)
+  comments(
+    @Req() req: AuthenticatedRequest,
+    @Param('postId') postId: string,
+  ) {
+    const { id } = assertAuthenticatedUser(req);
+    return this.feed.listComments(postId, id);
   }
 
   @Post('posts/:postId/comments')
