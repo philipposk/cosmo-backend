@@ -21,8 +21,11 @@ services:
       - key: FRONTEND_ORIGIN
         value: https://cosmo.6x7.gr,https://6x7.gr
 
-      # PostgreSQL — Supabase pooler, schema=cosmo. Format:
-      # postgresql://postgres.fmrnqepyyjucnfbrqawl:<DB_PASSWORD>@aws-0-eu-central-1.pooler.supabase.com:6543/postgres?schema=cosmo&pgbouncer=true
+      # PostgreSQL — use the Supabase DIRECT connection (port 5432) so
+      # `prisma migrate deploy` works (the pgbouncer pooler on 6543 breaks
+      # migration advisory locks). schema=cosmo keeps this app's tables
+      # namespaced. Format:
+      # postgresql://postgres:<DB_PASSWORD>@db.fmrnqepyyjucnfbrqawl.supabase.co:5432/postgres?schema=cosmo
       - key: DATABASE_URL
         sync: false
 
