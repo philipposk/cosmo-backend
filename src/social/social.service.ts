@@ -25,6 +25,20 @@ export class SocialService {
       throw new ConflictException('Cannot follow yourself');
     }
 
+    // A block in either direction prevents following.
+    const reverseBlock = await this.prisma.follow.findUnique({
+      where: {
+        followerId_followingId: {
+          followerId: followingId,
+          followingId: followerId,
+        },
+      },
+      select: { status: true },
+    });
+    if (reverseBlock?.status === FollowStatus.BLOCKED) {
+      throw new ForbiddenException('You cannot follow this user.');
+    }
+
     const existing = await this.prisma.follow.findUnique({
       where: {
         followerId_followingId: {
@@ -34,6 +48,11 @@ export class SocialService {
       },
     });
     if (existing) {
+      if (existing.status === FollowStatus.BLOCKED) {
+        throw new ForbiddenException(
+          'Unblock this user before following them.',
+        );
+      }
       return existing;
     }
 
@@ -83,6 +102,59 @@ export class SocialService {
         followingId,
       },
     });
+  }
+
+  /**
+   * Block a user: record a BLOCKED follow row (blocker → blocked), drop the
+   * blocked user's follow of the blocker, and end any friendship between them.
+   */
+  async block(blockerId: string, blockedId: string): Promise<{ blocked: true }> {
+    if (blockerId === blockedId) {
+      throw new ConflictException('Cannot block yourself');
+    }
+    await this.prisma.$transaction([
+      this.prisma.follow.upsert({
+        where: {
+          followerId_followingId: {
+            followerId: blockerId,
+            followingId: blockedId,
+          },
+        },
+        update: { status: FollowStatus.BLOCKED },
+        create: {
+          followerId: blockerId,
+          followingId: blockedId,
+          status: FollowStatus.BLOCKED,
+        },
+      }),
+      this.prisma.follow.deleteMany({
+        where: { followerId: blockedId, followingId: blockerId },
+      }),
+      this.prisma.friendship.updateMany({
+        where: {
+          OR: [
+            { initiatorId: blockerId, recipientId: blockedId },
+            { initiatorId: blockedId, recipientId: blockerId },
+          ],
+        },
+        data: { status: FriendshipStatus.BLOCKED },
+      }),
+    ]);
+    return { blocked: true };
+  }
+
+  async unblock(
+    blockerId: string,
+    blockedId: string,
+  ): Promise<{ blocked: false }> {
+    await this.prisma.follow.deleteMany({
+      where: {
+        followerId: blockerId,
+        followingId: blockedId,
+        status: FollowStatus.BLOCKED,
+      },
+    });
+    return { blocked: false };
   }
 
   async requestFriendship(

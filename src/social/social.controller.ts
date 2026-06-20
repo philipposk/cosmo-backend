@@ -91,6 +91,26 @@ export class SocialController {
     return { success: true };
   }
 
+  @Post('block')
+  @UseGuards(AuthenticatedGuard)
+  async block(
+    @Req() req: AuthenticatedRequest,
+    @Body() payload: FollowRequestDto,
+  ) {
+    const { id } = assertAuthenticatedUser(req);
+    return this.socialService.block(id, payload.followingId);
+  }
+
+  @Delete('block/:targetId')
+  @UseGuards(AuthenticatedGuard)
+  async unblock(
+    @Req() req: AuthenticatedRequest,
+    @Param('targetId') targetId: string,
+  ) {
+    const { id } = assertAuthenticatedUser(req);
+    return this.socialService.unblock(id, targetId);
+  }
+
   // ── Relationship status needs the viewer's identity → authenticated. ────────
 
   @Get('status')
