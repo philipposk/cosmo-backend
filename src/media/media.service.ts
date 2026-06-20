@@ -101,6 +101,27 @@ export class MediaService {
       );
     }
     const kind = this.inferKind(payload.contentType);
+
+    // Reject oversized uploads up-front (storage-abuse guard). Limits are per
+    // media kind; a claimed size over the cap is refused before we presign.
+    const MAX_BYTES: Record<MediaKind, number> = {
+      [MediaKind.IMAGE]: 15 * 1024 * 1024,
+      [MediaKind.AUDIO]: 100 * 1024 * 1024,
+      [MediaKind.VIDEO]: 200 * 1024 * 1024,
+      [MediaKind.DOCUMENT]: 25 * 1024 * 1024,
+    };
+    if (payload.sizeBytes != null) {
+      if (payload.sizeBytes <= 0) {
+        throw new BadRequestException('Invalid file size.');
+      }
+      if (payload.sizeBytes > MAX_BYTES[kind]) {
+        const mb = Math.round(MAX_BYTES[kind] / 1024 / 1024);
+        throw new BadRequestException(
+          `File too large — ${kind.toLowerCase()} uploads are limited to ${mb}MB.`,
+        );
+      }
+    }
+
     const extGuess = payload.contentType.split('/')[1] ?? 'bin';
     const id = `${Date.now().toString(36)}-${Math.random()
       .toString(36)

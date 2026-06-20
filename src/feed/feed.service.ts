@@ -63,7 +63,7 @@ export class FeedService {
       throw new BadRequestException('Post content is required');
     }
 
-    return this.prisma.post.create({
+    const post = await this.prisma.post.create({
       data: {
         authorId,
         title: dto.title ?? null,
@@ -82,6 +82,15 @@ export class FeedService {
       },
       include: POST_INCLUDE,
     });
+
+    await this.notifyMentions({
+      text: dto.content,
+      actorId: authorId,
+      targetType: 'POST',
+      targetId: post.id,
+    });
+
+    return post;
   }
 
   async list(viewerId: string, opts: { cursor?: string; authorId?: string }) {
@@ -180,28 +189,36 @@ export class FeedService {
     if (!post) throw new NotFoundException('Post not found');
     const kind = dto.kind as ReactionKind;
 
+    // A BOOKMARK is a private "save for later" — it must not touch the public
+    // like count and must not notify the author.
+    const isPublic = kind !== ReactionKind.BOOKMARK;
+
     const existing = await this.prisma.reaction.findUnique({
       where: { postId_userId_kind: { postId, userId, kind } },
     });
 
     if (existing) {
       await this.prisma.reaction.delete({ where: { id: existing.id } });
-      await this.prisma.post.update({
-        where: { id: postId },
-        data: { likesCount: { decrement: 1 } },
-      });
+      if (isPublic) {
+        await this.prisma.post.update({
+          where: { id: postId },
+          data: { likesCount: { decrement: 1 } },
+        });
+      }
       return { reacted: false };
     }
 
     await this.prisma.reaction.create({
       data: { postId, userId, kind },
     });
-    await this.prisma.post.update({
-      where: { id: postId },
-      data: { likesCount: { increment: 1 } },
-    });
+    if (isPublic) {
+      await this.prisma.post.update({
+        where: { id: postId },
+        data: { likesCount: { increment: 1 } },
+      });
+    }
 
-    if (post.authorId !== userId) {
+    if (isPublic && post.authorId !== userId) {
       await this.notifications.create({
         userId: post.authorId,
         actorId: userId,
@@ -280,11 +297,13 @@ export class FeedService {
       });
     }
 
+    const alreadyNotified = [post.authorId];
     if (dto.parentId) {
       const parent = await this.prisma.comment.findUnique({
         where: { id: dto.parentId },
       });
       if (parent && parent.authorId !== authorId) {
+        alreadyNotified.push(parent.authorId);
         await this.notifications.create({
           userId: parent.authorId,
           actorId: authorId,
@@ -294,6 +313,14 @@ export class FeedService {
         });
       }
     }
+
+    await this.notifyMentions({
+      text: dto.body,
+      actorId: authorId,
+      targetType: 'COMMENT',
+      targetId: comment.id,
+      excludeUserIds: alreadyNotified,
+    });
 
     return comment;
   }
@@ -359,5 +386,46 @@ export class FeedService {
         .sort((a, b) => a.position - b.position)
         .map((pm) => pm.media),
     };
+  }
+
+  /** Pull unique @usernames out of free text (usernames are stored lowercase). */
+  private extractMentions(text: string): string[] {
+    const matches = text.match(/@([a-z0-9_]{3,30})/gi) ?? [];
+    return [...new Set(matches.map((m) => m.slice(1).toLowerCase()))];
+  }
+
+  /**
+   * Notify every real user @mentioned in `text`, skipping the actor and anyone
+   * already notified for this action (post/comment author, parent author).
+   */
+  private async notifyMentions(opts: {
+    text: string;
+    actorId: string;
+    targetType: 'POST' | 'COMMENT';
+    targetId: string;
+    excludeUserIds?: string[];
+  }): Promise<void> {
+    const usernames = this.extractMentions(opts.text);
+    if (!usernames.length) return;
+
+    const exclude = new Set([opts.actorId, ...(opts.excludeUserIds ?? [])]);
+    const users = await this.prisma.user.findMany({
+      where: { username: { in: usernames } },
+      select: { id: true },
+    });
+
+    await Promise.all(
+      users
+        .filter((u) => !exclude.has(u.id))
+        .map((u) =>
+          this.notifications.create({
+            userId: u.id,
+            actorId: opts.actorId,
+            kind: NotificationKind.MENTION,
+            targetType: opts.targetType,
+            targetId: opts.targetId,
+          }),
+        ),
+    );
   }
 }
