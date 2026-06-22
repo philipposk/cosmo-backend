@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Req,
   UseGuards,
@@ -47,6 +48,16 @@ export class GoalsController {
   ) {
     const user = assertAuthenticatedUser(req);
     return this.goals.logProgress(id, user.id, payload);
+  }
+
+  @Patch(':id/status')
+  setStatus(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body() payload: { status: string },
+  ) {
+    const user = assertAuthenticatedUser(req);
+    return this.goals.setStatus(id, user.id, payload.status);
   }
 
   @Delete(':id')

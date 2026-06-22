@@ -86,4 +86,18 @@ export class GoalsService {
     await this.prisma.goal.delete({ where: { id } });
     return { success: true };
   }
+
+  private static readonly ALLOWED_STATUS = ['ACTIVE', 'COMPLETED', 'ARCHIVED'];
+
+  /** Move a goal between active / completed / archived (owner only). */
+  async setStatus(id: string, ownerId: string, status: string) {
+    if (!GoalsService.ALLOWED_STATUS.includes(status)) {
+      throw new BadRequestException(
+        `Invalid status — expected one of ${GoalsService.ALLOWED_STATUS.join(', ')}`,
+      );
+    }
+    const goal = await this.prisma.goal.findFirst({ where: { id, ownerId } });
+    if (!goal) throw new NotFoundException('Goal not found');
+    return this.prisma.goal.update({ where: { id }, data: { status } });
+  }
 }
