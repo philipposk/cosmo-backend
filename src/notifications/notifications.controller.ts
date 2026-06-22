@@ -21,9 +21,10 @@ export class NotificationsController {
   list(
     @Req() req: AuthenticatedRequest,
     @Query('unread') unread?: string,
+    @Query('cursor') cursor?: string,
   ) {
     const { id } = assertAuthenticatedUser(req);
-    return this.notifications.list(id, { unreadOnly: unread === '1' });
+    return this.notifications.list(id, { unreadOnly: unread === '1', cursor });
   }
 
   @Patch('read')

@@ -44,8 +44,9 @@ export class NotificationsService {
     return row;
   }
 
-  async list(userId: string, opts: { unreadOnly?: boolean }) {
-    const items = await this.prisma.notification.findMany({
+  async list(userId: string, opts: { unreadOnly?: boolean; cursor?: string }) {
+    const PAGE = 30;
+    const rows = await this.prisma.notification.findMany({
       where: {
         userId,
         ...(opts.unreadOnly ? { readAt: null } : {}),
@@ -61,14 +62,23 @@ export class NotificationsService {
         },
       },
       orderBy: { createdAt: 'desc' },
-      take: 50,
+      take: PAGE + 1,
+      cursor: opts.cursor ? { id: opts.cursor } : undefined,
+      skip: opts.cursor ? 1 : 0,
     });
+
+    const hasMore = rows.length > PAGE;
+    const items = hasMore ? rows.slice(0, PAGE) : rows;
 
     const unreadCount = await this.prisma.notification.count({
       where: { userId, readAt: null },
     });
 
-    return { items, unreadCount };
+    return {
+      items,
+      unreadCount,
+      nextCursor: hasMore ? items[items.length - 1]?.id ?? null : null,
+    };
   }
 
   async markAllRead(userId: string) {
@@ -85,6 +95,8 @@ export class NotificationsService {
       where: { id, userId },
       data: { readAt: new Date() },
     });
+    // Emit so other open devices/tabs update their unread badge live.
+    this.gateway.emitToUser(userId, 'notification:read', { id });
     return { success: true };
   }
 }
