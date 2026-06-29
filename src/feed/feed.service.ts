@@ -93,7 +93,13 @@ export class FeedService {
     return post;
   }
 
-  async list(viewerId: string, opts: { cursor?: string; authorId?: string }) {
+  async list(
+    viewerId: string,
+    opts: { cursor?: string; authorId?: string; sort?: 'new' | 'hot' },
+  ) {
+    if (opts.sort === 'hot') {
+      return this.listHot(viewerId, opts.cursor, opts.authorId);
+    }
     // Visibility filter: PUBLIC posts always; FRIENDS posts only if viewer
     // follows the author or it's their own; PRIVATE only own posts.
     const accepted = await this.prisma.follow.findMany({
@@ -133,6 +139,94 @@ export class FeedService {
       items: items.map((p) => this.shapePost(p, viewerId)),
       nextCursor: hasMore ? items[items.length - 1]?.id ?? null : null,
     };
+  }
+
+  /**
+   * "Hot" feed — Hacker-News-style power-law ranking computed on read:
+   *   score = (1 + likes + 2*comments) / (ageHours + 2) ^ GRAVITY
+   *
+   * Gravity is tuned down to 1.5 (vs HN's 1.8) because this is a calm,
+   * low-volume community: gentler decay keeps good posts visible for a day or
+   * two while fresh posts still climb. The `1 +` baseline gives brand-new,
+   * zero-engagement posts a fighting chance (cold-start fix).
+   *
+   * The decay depends on "now", so a stored/indexed score is impossible — we
+   * compute it in SQL with a snapshotted timestamp that is carried inside the
+   * cursor, so the ordering stays stable across pages of one scroll session.
+   */
+  private async listHot(viewerId: string, cursor?: string, authorId?: string) {
+    const GRAVITY = 1.5;
+
+    const accepted = await this.prisma.follow.findMany({
+      where: { followerId: viewerId, status: 'ACCEPTED' },
+      select: { followingId: true },
+    });
+    const followingIds = accepted.map((f) => f.followingId);
+    const friendIds = followingIds.length ? followingIds : ['__none__'];
+
+    // Snapshot the clock once and carry it (plus the keyset) in the cursor.
+    let nowMs: number;
+    let cursorScore: number | null = null;
+    let cursorId: string | null = null;
+    if (cursor) {
+      const [n, s, i] = cursor.split('_');
+      nowMs = Number(n);
+      cursorScore = Number(s);
+      cursorId = i ?? null;
+    } else {
+      nowMs = Date.now();
+    }
+    const now = new Date(nowMs);
+
+    const rows = await this.prisma.$queryRaw<Array<{ id: string; score: number }>>(
+      Prisma.sql`
+        SELECT id, score FROM (
+          SELECT "id",
+            (1 + "likesCount" + 2 * "commentsCount")
+              / POWER(
+                  EXTRACT(EPOCH FROM (${now}::timestamptz - "createdAt")) / 3600 + 2,
+                  ${GRAVITY}
+                ) AS score
+          FROM "Post"
+          WHERE "createdAt" > ${now}::timestamptz - INTERVAL '30 days'
+            AND (
+              "visibility" = 'PUBLIC'
+              OR "authorId" = ${viewerId}
+              OR ("visibility" = 'FRIENDS' AND "authorId" = ANY(${friendIds}))
+            )
+            ${authorId ? Prisma.sql`AND "authorId" = ${authorId}` : Prisma.empty}
+        ) ranked
+        ${
+          cursorScore !== null && cursorId !== null
+            ? Prisma.sql`WHERE (score < ${cursorScore} OR (score = ${cursorScore} AND id < ${cursorId}))`
+            : Prisma.empty
+        }
+        ORDER BY score DESC, id DESC
+        LIMIT ${FEED_PAGE_SIZE + 1}
+      `,
+    );
+
+    const hasMore = rows.length > FEED_PAGE_SIZE;
+    const pageRows = hasMore ? rows.slice(0, FEED_PAGE_SIZE) : rows;
+    const ids = pageRows.map((r) => r.id);
+    if (!ids.length) return { items: [], nextCursor: null };
+
+    // Fetch full post payloads, then restore the ranked order.
+    const posts = await this.prisma.post.findMany({
+      where: { id: { in: ids } },
+      include: POST_INCLUDE,
+    });
+    const byId = new Map(posts.map((p) => [p.id, p]));
+    const items = ids
+      .map((id) => byId.get(id))
+      .filter((p): p is NonNullable<typeof p> => Boolean(p))
+      .map((p) => this.shapePost(p, viewerId));
+
+    const last = pageRows[pageRows.length - 1];
+    const nextCursor =
+      hasMore && last ? `${nowMs}_${last.score}_${last.id}` : null;
+
+    return { items, nextCursor };
   }
 
   async get(postId: string, viewerId: string) {

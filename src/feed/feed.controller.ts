@@ -29,9 +29,14 @@ export class FeedController {
     @Req() req: AuthenticatedRequest,
     @Query('cursor') cursor?: string,
     @Query('author') authorId?: string,
+    @Query('sort') sort?: string,
   ) {
     const { id } = assertAuthenticatedUser(req);
-    return this.feed.list(id, { cursor, authorId });
+    return this.feed.list(id, {
+      cursor,
+      authorId,
+      sort: sort === 'hot' ? 'hot' : 'new',
+    });
   }
 
   @Get('feed/trending-tags')
