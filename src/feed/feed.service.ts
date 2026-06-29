@@ -439,22 +439,26 @@ export class FeedService {
   }
 
   async trendingTags(limit = 8) {
-    const rows = await this.prisma.post.findMany({
-      where: { visibility: VisibilityLevel.PUBLIC },
-      select: { tags: true },
-      orderBy: { createdAt: 'desc' },
-      take: 400,
-    });
-    const counts = new Map<string, number>();
-    for (const r of rows) {
-      for (const tag of r.tags) {
-        counts.set(tag, (counts.get(tag) ?? 0) + 1);
-      }
-    }
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, limit)
-      .map(([tag, count]) => ({ tag, count }));
+    // Time-decayed tag popularity over the last 14 days: a tag used a lot
+    // recently outranks an old one. weight = exp(-ageHours / 72) gives roughly
+    // a 2-day half-life so "trending" tracks current activity, not all-time.
+    const now = new Date();
+    const rows = await this.prisma.$queryRaw<
+      Array<{ tag: string; count: bigint }>
+    >(Prisma.sql`
+      SELECT tag, COUNT(*)::bigint AS count
+      FROM (
+        SELECT unnest("tags") AS tag,
+          EXP(-EXTRACT(EPOCH FROM (${now}::timestamptz - "createdAt")) / 3600 / 72) AS weight
+        FROM "Post"
+        WHERE "visibility" = 'PUBLIC'
+          AND "createdAt" > ${now}::timestamptz - INTERVAL '14 days'
+      ) t
+      GROUP BY tag
+      ORDER BY SUM(weight) DESC
+      LIMIT ${limit}
+    `);
+    return rows.map((r) => ({ tag: r.tag, count: Number(r.count) }));
   }
 
   private shapePost(
