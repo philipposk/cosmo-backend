@@ -1,32 +1,20 @@
-import { Body, Controller, Headers, Post, UnauthorizedException } from '@nestjs/common';
-import { AuthService } from './auth.service';
-import { SupabaseAuthService } from './supabase-auth.service';
-import { RegisterDto } from './dto/register.dto';
-import { LoginDto } from './dto/login.dto';
-import { AuthResponseDto } from './dto/auth-response.dto';
 import {
-  ConfirmEmailDto,
-  RequestResetDto,
-  RequestVerifyDto,
-  ResetPasswordDto,
-} from './dto/email-action.dto';
+  Controller,
+  Headers,
+  Post,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { SupabaseAuthService } from './supabase-auth.service';
+import { AuthResponseDto } from './dto/auth-response.dto';
 
+/**
+ * Sign-in is passwordless and happens at Supabase (Google, or an emailed link/code on the shared
+ * *.6x7.gr login). This API has no password signup, login, verify or reset routes: the only way in is
+ * exchanging a Supabase access token for a Cosmo JWT.
+ */
 @Controller('auth')
 export class AuthController {
-  constructor(
-    private readonly authService: AuthService,
-    private readonly supabaseAuth: SupabaseAuthService,
-  ) {}
-
-  @Post('register')
-  async register(@Body() payload: RegisterDto): Promise<AuthResponseDto> {
-    return this.authService.register(payload);
-  }
-
-  @Post('login')
-  async login(@Body() payload: LoginDto): Promise<AuthResponseDto> {
-    return this.authService.validateCredentials(payload);
-  }
+  constructor(private readonly supabaseAuth: SupabaseAuthService) {}
 
   /**
    * Exchange a Supabase access token for a Cosmo JWT + user profile.
@@ -42,28 +30,10 @@ export class AuthController {
   ): Promise<AuthResponseDto> {
     const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
     if (!token) {
-      throw new UnauthorizedException('Missing Supabase token in Authorization header');
+      throw new UnauthorizedException(
+        'Missing Supabase token in Authorization header',
+      );
     }
     return this.supabaseAuth.exchange(token);
-  }
-
-  @Post('request-verify')
-  async requestVerify(@Body() payload: RequestVerifyDto) {
-    return this.authService.requestEmailVerification(payload.email);
-  }
-
-  @Post('confirm-email')
-  async confirmEmail(@Body() payload: ConfirmEmailDto) {
-    return this.authService.confirmEmail(payload.token);
-  }
-
-  @Post('request-reset')
-  async requestReset(@Body() payload: RequestResetDto) {
-    return this.authService.requestPasswordReset(payload.email);
-  }
-
-  @Post('reset-password')
-  async resetPassword(@Body() payload: ResetPasswordDto) {
-    return this.authService.resetPassword(payload.token, payload.password);
   }
 }

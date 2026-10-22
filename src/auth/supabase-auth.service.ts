@@ -94,10 +94,12 @@ export class SupabaseAuthService {
 
       this.logger.log(`JIT provisioned user ${user.id} for Supabase ${supabaseId}`);
     } else if (!user.supabaseId) {
-      // Link existing user to Supabase
+      // Link an existing (pre-Supabase) user to the Supabase account with the same email. Drop any
+      // legacy password hash at the same time: sign-in is Google / emailed link only now, and a hash
+      // set by an old password signup must not outlive the link.
       user = await this.prisma.user.update({
         where: { id: user.id },
-        data: { supabaseId },
+        data: { supabaseId, hashedPassword: null },
       });
     }
 
