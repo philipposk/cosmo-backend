@@ -46,14 +46,13 @@ MINIO_PUBLIC_URL=http://localhost:9100
 SENTRY_DSN=...
 SENTRY_ENVIRONMENT=development
 SENTRY_TRACES_SAMPLE_RATE=0.1
-MAIL_TRANSPORT=console
 ```
 
 ## Module map
 
 ```
 src/
-  auth/                register, login, email verify, password reset
+  auth/                Supabase token -> Cosmo JWT exchange (no passwords)
   users/               profile read/update, privacy patch
   social/              follow + friend graph
   feed/                posts, reactions, comments, trending tags
@@ -70,14 +69,14 @@ src/
   stripe/              webhook handler
   moderation/          flagged stories admin API
   connected-apps/      AI OS / LifeHub / AppMaker / AppBlueprints seam
-  common/              auth guard, mailer, sentry init, date util
+  common/              auth guard, sentry init, date util
   prisma/              PrismaService + generated client
 ```
 
 ## Auth
 
-- `POST /auth/register`, `/auth/login` → returns `{ ...user, token }`.
-- `POST /auth/request-verify`, `/auth/confirm-email`, `/auth/request-reset`, `/auth/reset-password`.
+- Sign-in is passwordless (Google or an emailed link/code) and happens at Supabase, on the shared 6x7 login. This API has no password signup, login, verify or reset routes.
+- `POST /auth/supabase-exchange` with `Authorization: Bearer <supabase access token>` → returns `{ ...user, token }` (a Cosmo JWT). First sign-in creates the Cosmo user; an existing user with the same email is linked (same email, same account).
 - All protected routes use `AuthenticatedGuard`, expects `Authorization: Bearer <jwt>`.
 
 ## AI generation
